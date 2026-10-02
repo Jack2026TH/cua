@@ -3282,3 +3282,43 @@ html.is-teleport-picker .hp-panel {
   color: var(--dw-danger);
   font-size: 12px;
 }
+
+/* Collaborative workspace: a thin shell over existing Spaces, persistent
+   agents and run data. No separate backend or design system. */
+.collab-page {
+  overflow: auto;
+}
+
+.collab-composer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.collab-composer .dw-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.collab-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(320px, 1.2fr);
+  gap: 14px;
+}
+
+.collab-run .st-label,
+.collab-run .st-value {
+  min-width: 0;
+}
+
+.collab-run .st-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 860px) {
+  .collab-grid {
+    grid-template-columns: 1fr;
+  }
+}

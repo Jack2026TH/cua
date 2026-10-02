@@ -37,6 +37,7 @@ import { createInstallerBridge, type InstallerBridge } from '../../native/instal
 import { createAgentsBridge, type AgentsBridge } from '../../native/persistent';
 import { createDriveBridge, type DriveBridge } from '../../native/drive';
 import { AgentsPage, DrivePage, NotificationsPage, useAgentNotifications } from './AgentsPages';
+import { CollaborationPage } from './CollaborationPage';
 import { createDevicesBridge, type DevicesBridge } from '../../native/devices';
 import { createShareBridge, type ShareBridge } from '../../native/share';
 import { connectedClouds, createCloudBridge, isCloudWord, type CloudBridge, type CloudStatusWire } from '../../native/cloud';
@@ -257,7 +258,7 @@ export function MainWindow({
   });
   const [banner, setBanner] = useState<Banner>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-  const [view, setView] = useState<'spaces' | 'settings' | 'agents' | 'drive' | 'notifications'>(
+  const [view, setView] = useState<'spaces' | 'workspace' | 'settings' | 'agents' | 'drive' | 'notifications'>(
     startView === 'settings'
       ? 'settings'
       : startView === 'drive'
@@ -653,6 +654,7 @@ export function MainWindow({
           <ul className="dw-nav-list" aria-label="Agents">
             {(
               [
+                ['workspace', 'Workspace'],
                 ['agents', 'Agents'],
                 ...(chrome.volumeLabel ? [['drive', chrome.volumeLabel] as const] : []),
                 ['notifications', 'Notifications'],
@@ -687,7 +689,14 @@ export function MainWindow({
       </aside>
 
       <main className="dw-main">
-        {view === 'agents' ? (
+        {view === 'workspace' ? (
+          <CollaborationPage
+            spaces={spaces}
+            agentsBridge={agentsBridge}
+            teleport={teleport}
+            onOpenSpace={openSpace}
+          />
+        ) : view === 'agents' ? (
           <AgentsPage
             bridge={agentsBridge}
             thisMachine={sidebar.thisMachine?.id.startsWith('relay:') ? sidebar.thisMachine.id : null}

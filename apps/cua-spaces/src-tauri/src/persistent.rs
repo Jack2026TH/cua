@@ -18,6 +18,7 @@ use crate::core::{AppCore, CmdResult};
 /// The Spaces tools these pages may call (nothing that creates or deletes).
 pub const TOOLS: &[&str] = &[
     "persistent_agent_list",
+    "persistent_agent_send",
     "persistent_agent_save",
     "agent_pause",
     "agent_resume",

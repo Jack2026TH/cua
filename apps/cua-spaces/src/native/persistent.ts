@@ -32,6 +32,8 @@ const MAX_HOME_ENTRIES = 500;
  */
 export interface AgentsBridge {
   agents(): Promise<PersistentAgentInput[]>;
+  /** Give a persistent agent a turn through the daemon's canonical tool. */
+  sendMessage(name: string, text: string): Promise<void>;
   home(name: string): Promise<DriveEntryInput[]>;
   routines(name: string): Promise<RoutineInput[]>;
   access(): Promise<{ grants: ComputerGrantInput[]; audit: AccessAuditInput[] }>;
@@ -85,6 +87,9 @@ export function createAgentsBridgeOver(
         savedMs: a.saved_ms ?? 0,
         lastError: a.last_error ?? null,
       })),
+    sendMessage: async (name, text) => {
+      await call('persistent_agent_send', { name, text });
+    },
     home: async (name) => {
       const out: DriveEntryInput[] = [];
       const queue = [`agents/${name}/`];
