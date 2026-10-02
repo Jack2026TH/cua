@@ -26,6 +26,8 @@ public enum SettingsTab: Hashable, Sendable {
 public enum MainSelection: Hashable {
     case space(String)
     case keyvault(KvSelection)
+    /// Collaborative people + agents workspace.
+    case workspace
     /// Persistent agents.
     case agents
     /// The Cua Volume.

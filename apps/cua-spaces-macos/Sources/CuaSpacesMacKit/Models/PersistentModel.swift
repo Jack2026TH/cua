@@ -38,6 +38,40 @@ private extension Dictionary where Key == String, Value == Any {
     func arr(_ k: String) -> [[String: Any]] { (self[k] as? [Any] ?? []).compactMap { $0 as? [String: Any] } }
 }
 
+public struct WorkspaceAgent: Identifiable, Equatable, Sendable {
+    public var id: String { name }
+    public let name: String
+    public let harness: String
+    public let space: String
+    public let paused: Bool
+    public let runId: String?
+}
+
+public enum WorkspaceMessageRole: String, Equatable, Sendable {
+    case you
+    case agent
+    case system
+}
+
+public struct WorkspaceMessage: Identifiable, Equatable, Sendable {
+    public let id: UUID
+    public let role: WorkspaceMessageRole
+    public let author: String
+    public let target: String?
+    public let text: String
+    public let runId: String?
+    public let space: String?
+}
+
+public struct WorkspaceRun: Identifiable, Equatable, Sendable {
+    public var id: String { runId }
+    public let runId: String
+    public let agent: String
+    public let space: String
+    public let status: String
+    public let phase: String
+}
+
 /// The Agents, Drive and Notifications pages: the app core's `agents.*`,
 /// `drive.*` and `notifications.*` over the daemon's tools. Allowing an agent
 /// on a computer and approving a drive request ask for presence in the
@@ -49,6 +83,10 @@ public final class PersistentModel {
     public var thisMachine: String?
     var agentsInput: [String: Any] = ["agents": []]
     public private(set) var agentsState = appAgentsInitial()
+    public private(set) var workspaceMessages: [WorkspaceMessage] = []
+    public private(set) var workspaceRuns: [WorkspaceRun] = []
+    public private(set) var workspaceError: String?
+    public private(set) var workspaceSending = false
     var driveInput: [String: Any] = ["requests": [], "grants": [], "home": userHome()]
     public private(set) var driveState = appDriveInitial()
     /// Shows a path in Finder (the mount, a conflict's copy).
@@ -118,6 +156,142 @@ public final class PersistentModel {
              "runId": a["run_id"] ?? NSNull(), "savedMs": a["saved_ms"] ?? 0,
              "lastError": a["last_error"] ?? NSNull()] as [String: Any]
         }
+    }
+
+    /// The same persistent-agent roster the Agents page renders, exposed for
+    /// the collaborative workspace without creating a second source of truth.
+    public var workspaceAgents: [WorkspaceAgent] {
+        (agentsInput["agents"] as? [[String: Any]] ?? []).map {
+            WorkspaceAgent(name: $0["name"] as? String ?? "",
+                           harness: $0["harness"] as? String ?? "",
+                           space: $0["space"] as? String ?? "",
+                           paused: $0["paused"] as? Bool ?? false,
+                           runId: $0["runId"] as? String)
+        }
+    }
+
+    private func workspaceAgent(named name: String) -> WorkspaceAgent? {
+        workspaceAgents.first { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    private func upsertWorkspaceRun(_ run: WorkspaceRun) {
+        if let index = workspaceRuns.firstIndex(where: { $0.runId == run.runId }) {
+            workspaceRuns[index] = run
+        } else {
+            workspaceRuns.insert(run, at: 0)
+        }
+    }
+
+    /// One collaborative turn over the daemon's existing persistent-agent
+    /// transport. A live run is resumed; otherwise the configured persistent
+    /// agent is started in its existing Space.
+    public func workspaceSend(name: String, text: String, label: String = "You",
+                              displayText: String? = nil) async {
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty, !workspaceSending else { return }
+        guard let agent = workspaceAgent(named: name) else {
+            workspaceError = "Persistent agent \"\(name)\" was not found"
+            return
+        }
+
+        workspaceSending = true
+        workspaceError = nil
+        workspaceMessages.append(WorkspaceMessage(id: UUID(), role: .you, author: label,
+                                                  target: agent.name, text: displayText ?? body,
+                                                  runId: nil, space: agent.space))
+        defer { workspaceSending = false }
+
+        do {
+            if agent.paused {
+                _ = try await call("agent_resume", ["name": agent.name])
+            }
+
+            let receipt: [String: Any]
+            if let runId = agent.runId, !runId.isEmpty {
+                receipt = try await call("agent_message", [
+                    "space": agent.space,
+                    "run_id": runId,
+                    "text": body,
+                ])
+            } else {
+                receipt = try await call("agent_start", [
+                    "space": agent.space,
+                    "agent": agent.harness,
+                    "prompt": body,
+                    "home": agent.name,
+                    "show": false,
+                ])
+            }
+
+            guard let runId = (receipt["run_id"] as? String) ?? agent.runId, !runId.isEmpty else {
+                throw AgentsToolError(message: "Agent did not return a run id")
+            }
+            let space = receipt["space"] as? String ?? agent.space
+            upsertWorkspaceRun(WorkspaceRun(runId: runId, agent: agent.name, space: space,
+                                            status: receipt["status"] as? String ?? "running",
+                                            phase: receipt["phase"] as? String ?? ""))
+            try await pollWorkspaceRun(agent: agent.name, space: space, runId: runId)
+        } catch {
+            workspaceError = error.localizedDescription
+        }
+    }
+
+    public func workspaceHandoff(to target: String, from selected: String?) async {
+        let source = workspaceMessages.reversed().first(where: { $0.role == .agent })?.author
+            ?? selected ?? "Workspace"
+        let context = workspaceMessages.suffix(8).map { message in
+            let arrow = message.target.map { " → \($0)" } ?? ""
+            return "\(message.author)\(arrow): \(message.text)"
+        }.joined(separator: "\n")
+        let prompt = """
+        Handoff from \(source).
+        Continue the task from the shared workspace context below. Preserve completed work and do not repeat finished steps.
+
+        \(context.isEmpty ? "No prior thread messages." : context)
+        """
+        await workspaceSend(name: target, text: prompt, label: "Handoff · \(source)",
+                            displayText: "Continue from \(source)")
+    }
+
+    private func pollWorkspaceRun(agent: String, space: String, runId: String) async throws {
+        let terminal: Set<String> = ["idle", "failed", "crashed"]
+        var lastStatus = "running"
+        var lastPhase = ""
+
+        for _ in 0..<40 {
+            if Task.isCancelled { return }
+            let status = try await call("agent_status", ["space": space, "run_id": runId, "tail": 20])
+            lastStatus = status["status"] as? String ?? "unknown"
+            lastPhase = status["phase"] as? String ?? ""
+            upsertWorkspaceRun(WorkspaceRun(runId: runId, agent: agent, space: space,
+                                            status: lastStatus, phase: lastPhase))
+
+            if terminal.contains(lastStatus) {
+                let result = status["result"] as? [String: Any] ?? [:]
+                let candidates = [
+                    result["text"] as? String,
+                    status["summary"] as? String,
+                    result["error"] as? String,
+                    status["reason"] as? String,
+                ]
+                let text = candidates.compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .first(where: { !$0.isEmpty }) ?? (lastStatus == "idle" ? "Done." : "Run \(lastStatus).")
+                workspaceMessages.append(WorkspaceMessage(id: UUID(),
+                                                          role: lastStatus == "idle" ? .agent : .system,
+                                                          author: lastStatus == "idle" ? agent : "System",
+                                                          target: nil, text: text,
+                                                          runId: runId, space: space))
+                await loadAgents()
+                return
+            }
+
+            try await Task.sleep(nanoseconds: 1_200_000_000)
+        }
+
+        workspaceMessages.append(WorkspaceMessage(id: UUID(), role: .system, author: "System",
+                                                  target: nil,
+                                                  text: "\(agent) is still \(lastStatus)\(lastPhase.isEmpty ? "" : " · \(lastPhase)").",
+                                                  runId: runId, space: space))
     }
 
     private func loadDetail(_ name: String) async throws {

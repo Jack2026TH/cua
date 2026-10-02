@@ -12,12 +12,14 @@ import Testing
 /// An in-memory daemon for the Agents, Drive and Notifications pages.
 final class FakeAgentsTools: AgentsToolRunning, @unchecked Sendable {
     var calls: [String] = []
+    var callArgs: [(String, [String: Any])] = []
     var paused = false
     var grants: [[String: Any]] = []
     let now: Int64 = 1_790_000_000_000
 
     func agentsTool(_ tool: String, _ args: [String: Any]) async throws -> Any {
         calls.append(tool)
+        callArgs.append((tool, args))
         switch tool {
         case "persistent_agent_list":
             return ["agents": [
@@ -25,6 +27,14 @@ final class FakeAgentsTools: AgentsToolRunning, @unchecked Sendable {
                 ["name": "scout", "harness": "claude-code", "space": "cloud:scout", "paused": true, "space_state": "released", "saved_ms": now - 7_200_000],
             ]]
         case "agent_pause": paused = true; return [:]
+        case "agent_resume": paused = false; return [:]
+        case "agent_message":
+            return ["run_id": args["run_id"] ?? "run-1", "status": "running"]
+        case "agent_start":
+            return ["run_id": "run-2", "space": args["space"] ?? "local:dev", "status": "running"]
+        case "agent_status":
+            return ["run_id": args["run_id"] ?? "", "space": args["space"] ?? "",
+                    "status": "idle", "phase": "done", "result": ["text": "Workspace done."]]
         case "volume_ls":
             let path = args["path"] as? String ?? ""
             if path == "agents/ada/" { return ["entries": [["path": "agents/ada/hermes/", "name": "hermes", "folder": true]]] }
@@ -73,6 +83,28 @@ struct AgentsPagesTests {
         await m.pollNotifications()
         #expect(posted.isEmpty, "the backlog is not posted on the first run")
         #expect(seen == UInt64(tools.now - 60_000))
+    }
+
+    @Test func workspaceRoutesTurnsAndHandoffsOverPersistentTools() async throws {
+        let tools = FakeAgentsTools()
+        let m = PersistentModel(tools: tools)
+        await m.loadAgents()
+
+        await m.workspaceSend(name: "ada", text: "Check bookings")
+        #expect(tools.calls.contains("agent_message"))
+        #expect(m.workspaceRuns.first?.runId == "run-1")
+        #expect(m.workspaceMessages.last?.text == "Workspace done.")
+
+        await m.workspaceHandoff(to: "scout", from: "ada")
+        #expect(tools.calls.contains("agent_resume"))
+        #expect(tools.calls.contains("agent_start"))
+
+        let start = tools.callArgs.last { $0.0 == "agent_start" }
+        let home = start?.1["home"] as? String
+        let prompt = start?.1["prompt"] as? String
+        #expect(home == "scout")
+        #expect(prompt?.contains("Handoff from ada.") == true)
+        #expect(prompt?.contains("Workspace done.") == true)
     }
 
     @Test func snapshots() async throws {

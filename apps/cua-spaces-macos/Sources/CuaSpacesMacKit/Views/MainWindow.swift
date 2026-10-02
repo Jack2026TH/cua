@@ -90,6 +90,11 @@ public struct MainWindow: View {
             }
         case .keyvault(let selection):
             KeyvaultDetail(keyvault: model.keyvault, selection: selection)
+        case .workspace:
+            WorkspacePageView(model: model.persistent) { spaceId in
+                model.selection = .space(spaceId)
+            }
+            .onAppear { model.recordFeature("workspace_page_open") }
         case .agents:
             AgentsPageView(model: model.persistent)
                 .onAppear {
@@ -156,6 +161,7 @@ struct Sidebar: View {
                 KeyvaultHeader(keyvault: kv, title: model.chrome.keyvaultTitle)
             }
             Section {
+                Label("Workspace", systemImage: "bubble.left.and.bubble.right").tag(MainSelection.workspace)
                 Label("Agents", systemImage: "person.2").tag(MainSelection.agents)
                 // Only with the Cua Volume experiment on (the core's chrome).
                 if let volume = model.chrome.volumeLabel {
