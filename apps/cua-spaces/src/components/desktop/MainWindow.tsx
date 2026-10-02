@@ -78,6 +78,7 @@ import { useExperiments } from '../../state/experiments';
 import { createLoginItemBridge, type LoginItemBridge } from '../../native/loginItem';
 import { launchPlan, readLaunchChoice, writeLaunchChoice } from '../../model/loginItem';
 import { Sym } from './Sym';
+import { WorkspacePage } from './WorkspacePage';
 
 export interface MainWindowProps {
   fleet?: FleetBridge;
@@ -257,7 +258,7 @@ export function MainWindow({
   });
   const [banner, setBanner] = useState<Banner>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-  const [view, setView] = useState<'spaces' | 'settings' | 'agents' | 'drive' | 'notifications'>(
+  const [view, setView] = useState<'spaces' | 'settings' | 'workspace' | 'agents' | 'drive' | 'notifications'>(
     startView === 'settings'
       ? 'settings'
       : startView === 'drive'
@@ -653,6 +654,7 @@ export function MainWindow({
           <ul className="dw-nav-list" aria-label="Agents">
             {(
               [
+                ['workspace', 'Workspace'],
                 ['agents', 'Agents'],
                 ...(chrome.volumeLabel ? [['drive', chrome.volumeLabel] as const] : []),
                 ['notifications', 'Notifications'],
@@ -687,7 +689,9 @@ export function MainWindow({
       </aside>
 
       <main className="dw-main">
-        {view === 'agents' ? (
+        {view === 'workspace' ? (
+          <WorkspacePage bridge={agentsBridge} onOpenSpace={openSpace} />
+        ) : view === 'agents' ? (
           <AgentsPage
             bridge={agentsBridge}
             thisMachine={sidebar.thisMachine?.id.startsWith('relay:') ? sidebar.thisMachine.id : null}

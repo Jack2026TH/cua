@@ -25,6 +25,24 @@ export type ToolCall = (tool: string, args?: Record<string, unknown>) => Promise
 /** Largest home listed (entries). */
 const MAX_HOME_ENTRIES = 500;
 
+export interface AgentChatReceipt {
+  name: string;
+  runId: string;
+  space: string;
+  status: string;
+}
+
+export interface AgentChatStatus {
+  runId: string;
+  space: string;
+  status: string;
+  phase: string;
+  reason: string;
+  acceptsMessage: boolean;
+  text: string;
+  summary: string;
+}
+
 /**
  * The Agents, Drive and Notifications pages' data and requests, over the
  * daemon's Spaces tools. Allowing an agent on a computer and approving a
@@ -32,6 +50,10 @@ const MAX_HOME_ENTRIES = 500;
  */
 export interface AgentsBridge {
   agents(): Promise<PersistentAgentInput[]>;
+  /** Send one turn to a persistent agent, resuming its run when possible. */
+  chat(name: string, text: string): Promise<AgentChatReceipt>;
+  /** Read the current run state without disturbing it. */
+  agentStatus(space: string, runId: string): Promise<AgentChatStatus>;
   home(name: string): Promise<DriveEntryInput[]>;
   routines(name: string): Promise<RoutineInput[]>;
   access(): Promise<{ grants: ComputerGrantInput[]; audit: AccessAuditInput[] }>;
@@ -85,6 +107,60 @@ export function createAgentsBridgeOver(
         savedMs: a.saved_ms ?? 0,
         lastError: a.last_error ?? null,
       })),
+    chat: async (name, text) => {
+      const agents = ((await call('persistent_agent_list')).agents ?? []).map((a: any) => ({
+        name: a.name,
+        harness: a.harness,
+        space: a.space,
+        paused: Boolean(a.paused),
+        runId: a.run_id ?? null,
+      }));
+      const agent = agents.find((a: any) => a.name.toLocaleLowerCase() === name.toLocaleLowerCase());
+      if (!agent) throw new Error(`Persistent agent "${name}" was not found`);
+      if (!text.trim()) throw new Error('Message is empty');
+      if (agent.paused) await call('agent_resume', { name: agent.name });
+
+      if (agent.runId) {
+        const r = await call('agent_message', {
+          space: agent.space,
+          run_id: agent.runId,
+          text,
+        });
+        return {
+          name: agent.name,
+          runId: r.run_id ?? agent.runId,
+          space: agent.space,
+          status: r.status ?? 'running',
+        };
+      }
+
+      const r = await call('agent_start', {
+        space: agent.space,
+        agent: agent.harness,
+        prompt: text,
+        home: agent.name,
+        show: false,
+      });
+      return {
+        name: agent.name,
+        runId: r.run_id,
+        space: r.space ?? agent.space,
+        status: 'running',
+      };
+    },
+    agentStatus: async (space, runId) => {
+      const r = await call('agent_status', { space, run_id: runId, tail: 20 });
+      return {
+        runId: r.run_id ?? runId,
+        space: r.space ?? space,
+        status: r.status ?? 'unknown',
+        phase: r.phase ?? '',
+        reason: r.reason ?? '',
+        acceptsMessage: Boolean(r.accepts_message),
+        text: r.result?.text ?? '',
+        summary: r.summary ?? '',
+      };
+    },
     home: async (name) => {
       const out: DriveEntryInput[] = [];
       const queue = [`agents/${name}/`];
